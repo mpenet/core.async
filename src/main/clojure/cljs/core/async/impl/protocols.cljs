@@ -23,13 +23,15 @@
 
 (defprotocol Handler
   (active? [h] "returns true if has callback. Must work w/o lock")
+  (blockable? [h] "returns true if this handler may be blocked, otherwise it must not block")
   #_(lock-id [h] "a unique id for lock acquisition order, 0 if no lock")
   (commit [h] "commit to fulfilling its end of the transfer, returns cb. Must be called within lock"))
 
 (defprotocol Buffer
   (full? [b])
   (remove! [b])
-  (add!* [b itm]))
+  (add!* [b itm])
+  (close-buf! [b]))
 
 (defn add!
   ([b] b)

@@ -22,13 +22,15 @@
   [state-array]
   (keyword-identical? (aget state-array STATE-IDX) :finished))
 
-(defn- fn-handler
-  [f]
-  (reify
-   impl/Handler
-   (active? [_] true)
-   (commit [_] f)))
-
+(defn fn-handler
+  ([f]
+   (fn-handler f true))
+  ([f blockable]
+   (reify
+     impl/Handler
+     (active? [_] true)
+     (blockable? [_] blockable)
+     (commit [_] f))))
 
 (defn run-state-machine [state]
   ((aget-object state FN-IDX) state))

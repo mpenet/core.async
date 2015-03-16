@@ -1,5 +1,8 @@
 (ns cljs.core.async.tests
-  (:require [cljs.core.async :refer [buffer dropping-buffer sliding-buffer put! take! chan close! take partition-by] :as async]
+  (:require [cljs.core.async :refer [buffer dropping-buffer sliding-buffer put!
+                                     take! chan close! take partition-by
+                                      offer! poll! promise-chan]
+             :as async]
             [cljs.core.async.impl.dispatch :as dispatch]
             [cljs.core.async.impl.buffers :as buff]
             [cljs.core.async.impl.timers :as timers :refer [timeout]]
@@ -309,3 +312,40 @@
       (is (= [:value c] (async/alts! [c (async/timeout 6000)] :priority true))))
     (go
       (is (= [true c] (async/alts! [[c :value] (async/timeout 6000)] :priority true))))))
+
+(deftest test-promise-chan
+  (testing "put on promise-chan fulfills all pending takers"
+    (let [c (promise-chan)]
+      (put! c :val (fn [_] (is true)) true)
+      (take! c #(is (= :val %)))
+      (testing "then puts succeed but are dropped"
+        (put! c :LOST (fn [_] (is true)) true)
+        (take! c #(is (= :val %))))
+      (testing "then takes succeed with the original value"
+        (take! c #(is (= :val %)))
+        (take! c #(is (= :val %)))
+        (take! c #(is (= :val %))))
+      (testing "then after close takes return nil"
+        (close! c)
+        (take! c #(is (nil? %)))
+        (take! c #(is (nil? %))))))
+  (testing "close on promise-chan fulfills all pending takers"
+    (let [c (promise-chan)]
+      (take! c #(is (nil? %)))
+      (take! c #(is (nil? %)))
+      (take! c #(is (nil? %)))
+      (close! c)
+      (testing "then takes return nil"
+        (take! c #(is (nil? %)))))))
+
+(deftest offer-poll
+  (let [c (chan 2)]
+    (is (true? (offer! c 1)))
+    (is (true? (offer! c 2)))
+    (is (nil? (offer! c 3)))
+    (take! c #(is (= 1 %)) true)
+    (is (= 2 (poll! c)))
+    (is (nil? (poll! c))))
+  (let [c (chan)]
+    (is (nil? (offer! c 1)))
+    (is (nil? (poll! c)))))
