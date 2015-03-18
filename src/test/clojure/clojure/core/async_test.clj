@@ -1,6 +1,7 @@
 (ns clojure.core.async-test
   (:refer-clojure :exclude [map into reduce merge take partition partition-by])
   (:require [clojure.core.async.impl.buffers :as b]
+            [clojure.core.async.impl.exec.threadpool :as tp]
             [clojure.core.async :refer :all :as a]
             [clojure.test :refer :all]))
 
@@ -177,7 +178,11 @@
 (deftest thread-tests
   (testing "bindings"
     (binding [test-dyn true]
-      (is (<!! (thread test-dyn))))))
+      (is (<!! (thread test-dyn)))))
+
+  (testing "custom executor"
+    (= 42 (<!! (thread* {:executor (tp/thread-pool-executor @tp/default-fixed-executor)}
+                        42)))))
 
 
 (deftest ops-tests

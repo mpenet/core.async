@@ -10,7 +10,8 @@
   clojure.core.async.impl.channels
   (:require [clojure.core.async.impl.protocols :as impl]
             [clojure.core.async.impl.dispatch :as dispatch]
-            [clojure.core.async.impl.mutex :as mutex])
+            [clojure.core.async.impl.mutex :as mutex]
+            [clojure.core.async.impl.exec.threadpool :as tp])
   (:import [java.util LinkedList Queue Iterator]
            [java.util.concurrent.locks Lock]))
 
@@ -29,7 +30,8 @@
   (cleanup [_])
   (abort [_]))
 
-(deftype ManyToManyChannel [^LinkedList takes ^LinkedList puts ^Queue buf closed ^Lock mutex add!]
+(deftype ManyToManyChannel [^LinkedList takes ^LinkedList puts ^Queue buf closed ^Lock mutex add!
+                            executor]
   MMC
   (cleanup
    [_]
@@ -57,7 +59,7 @@
          (let [put-cb (and (impl/active? putter) (impl/commit putter))]
            (.unlock putter)
            (when put-cb
-             (dispatch/run (fn [] (put-cb true))))
+             (dispatch/run (fn [] (put-cb true)) executor))
            (when (.hasNext iter)
              (recur (.next iter)))))))
    (.clear puts)
@@ -99,7 +101,7 @@
                          (when done?
                            (abort this))
                          (.unlock mutex)
-                         (dispatch/run (fn [] (take-cb val))))
+                         (dispatch/run (fn [] (take-cb val)) executor))
                        (do
                          (when done?
                            (abort this))
@@ -130,7 +132,7 @@
            (if (and put-cb take-cb)
              (do
                (.unlock mutex)
-               (dispatch/run (fn [] (take-cb val)))
+               (dispatch/run (fn [] (take-cb val)) executor)
                (box true))
              (if (and buf (not (impl/full? buf)))
                (do
@@ -155,7 +157,7 @@
                    (.add puts [handler val]))
                  (.unlock mutex)
                  nil))))))))
-  
+
   impl/ReadPort
   (take!
    [this handler]
@@ -189,7 +191,7 @@
                (abort this))
              (.unlock mutex)
              (doseq [cb cbs]
-               (dispatch/run #(cb true)))
+               (dispatch/run #(cb true) executor))
              (box val))
            (do (.unlock mutex)
                nil)))
@@ -215,7 +217,7 @@
          (if (and put-cb take-cb)
            (do
              (.unlock mutex)
-             (dispatch/run #(put-cb true))
+             (dispatch/run #(put-cb true) executor)
              (box val))
            (if @closed
              (do
@@ -260,7 +262,7 @@
                (.unlock taker)
                (when take-cb
                  (let [val (when (and buf (pos? (count buf))) (impl/remove! buf))]
-                   (dispatch/run (fn [] (take-cb val)))))
+                   (dispatch/run (fn [] (take-cb val)) executor)))
                (.remove iter)
                (when (.hasNext iter)
                  (recur (.next iter)))))))
@@ -283,7 +285,8 @@
 (defn chan
   ([buf] (chan buf nil))
   ([buf xform] (chan buf xform nil))
-  ([buf xform exh]
+  ([buf xform exh] (chan buf xform exh nil))
+  ([buf xform exh executor]
      (ManyToManyChannel.
       (LinkedList.) (LinkedList.) buf (atom false) (mutex/mutex)
       (let [add! (if xform (xform impl/add!) impl/add!)]
@@ -297,5 +300,6 @@
              (try
                (add! buf val)
                (catch Throwable t
-                 (handle buf exh t)))))))))
-
+                 (handle buf exh t))))))
+      (or executor
+          (tp/thread-pool-executor @tp/default-fixed-executor)))))

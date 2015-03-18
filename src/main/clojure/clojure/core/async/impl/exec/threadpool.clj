@@ -13,17 +13,23 @@
 
 (set! *warn-on-reflection* true)
 
-(defonce the-executor
-  (Executors/newFixedThreadPool
-   (-> (Runtime/getRuntime)
-       (.availableProcessors)
-       (* 2)
-       (+ 42))
-   (conc/counted-thread-factory "async-dispatch-%d" true)))
+(defonce default-fixed-executor
+  (delay
+   (Executors/newFixedThreadPool
+    (-> (Runtime/getRuntime)
+        (.availableProcessors)
+        (* 2)
+        (+ 42))
+    (conc/counted-thread-factory "async-dispatch-%d" true))))
+
+(defonce default-cached-executor
+  (delay
+   (Executors/newCachedThreadPool
+    (conc/counted-thread-factory "async-thread-macro-%d"
+                                 true))))
 
 (defn thread-pool-executor
-  ([] (thread-pool-executor the-executor))
-  ([^Executor executor-svc]
-     (reify impl/Executor
-       (impl/exec [this r]
-         (.execute executor-svc ^Runnable r)))))
+  [^Executor executor-svc]
+  (reify impl/Executor
+    (impl/exec [this r]
+      (.execute executor-svc ^Runnable r))))

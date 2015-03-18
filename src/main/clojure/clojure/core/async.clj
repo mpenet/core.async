@@ -17,7 +17,7 @@
             [clojure.core.async.impl.ioc-macros :as ioc]
             [clojure.core.async.impl.mutex :as mutex]
             [clojure.core.async.impl.concurrent :as conc]
-            )
+            [clojure.core.async.impl.exec.threadpool :as tp])
   (:import [clojure.core.async ThreadLocalRandom]
            [java.util.concurrent.locks Lock]
            [java.util.concurrent Executors Executor]
@@ -78,9 +78,13 @@
   ([] (chan nil))
   ([buf-or-n] (chan buf-or-n nil))
   ([buf-or-n xform] (chan buf-or-n xform nil))
-  ([buf-or-n xform ex-handler]
+  ([buf-or-n xform ex-handler] (chan buf-or-n xform ex-handler nil))
+  ([buf-or-n xform ex-handler executor]
      (when xform (assert buf-or-n "buffer must be supplied when transducer is"))
-     (channels/chan (if (number? buf-or-n) (buffer buf-or-n) buf-or-n) xform ex-handler)))
+     (channels/chan (if (number? buf-or-n) (buffer buf-or-n) buf-or-n)
+                    xform
+                    ex-handler
+                    executor)))
 
 (defn promise-chan
   "Creates a promise channel with an optional transducer, and an optional
@@ -90,8 +94,9 @@
   channel is closed. See chan for the semantics of xform and ex-handler."
   ([] (promise-chan nil))
   ([xform] (promise-chan xform nil))
-  ([xform ex-handler]
-     (chan (buffers/promise-buffer) xform ex-handler)))
+  ([xform ex-handler] (promise-chan xform nil nil))
+  ([xform ex-handler executor]
+     (chan (buffers/promise-buffer) xform ex-handler executor)))
 
 (defn timeout
   "Returns a channel that will close after msecs"
@@ -395,6 +400,25 @@
   (let [ret (impl/take! port (fn-handler nop false))]
     (when ret @ret)))
 
+(defmacro go*
+  "Same as go but takes an option map first:
+:executor - An executor that implements
+clojure.core.async.impl.protocols/Executor"
+  [{:as opts
+    :keys [executor]}
+   & body]
+  `(let [c# (chan 1)
+         captured-bindings# (clojure.lang.Var/getThreadBindingFrame)]
+     (dispatch/run
+       (fn []
+         (let [f# ~(ioc/state-machine `(do ~@body) 1 (keys &env) ioc/async-custom-terminators)
+               state# (-> (f#)
+                          (ioc/aset-all! ioc/USER-START-IDX c#
+                                         ioc/BINDINGS-IDX captured-bindings#))]
+           (ioc/run-state-machine-wrapped state#)))
+       (or ~executor (tp/thread-pool-executor @tp/default-fixed-executor)))
+     c#))
+
 (defmacro go
   "Asynchronously executes the body, returning immediately to the
   calling thread. Additionally, any visible calls to <!, >! and alt!/alts!
@@ -406,37 +430,35 @@
   Returns a channel which will receive the result of the body when
   completed"
   [& body]
-  `(let [c# (chan 1)
-         captured-bindings# (clojure.lang.Var/getThreadBindingFrame)]
-     (dispatch/run
-      (fn []
-        (let [f# ~(ioc/state-machine `(do ~@body) 1 (keys &env) ioc/async-custom-terminators)
-              state# (-> (f#)
-                         (ioc/aset-all! ioc/USER-START-IDX c#
-                                        ioc/BINDINGS-IDX captured-bindings#))]
-          (ioc/run-state-machine-wrapped state#))))
-     c#))
-
-(defonce ^:private ^Executor thread-macro-executor
-  (Executors/newCachedThreadPool (conc/counted-thread-factory "async-thread-macro-%d" true)))
+  `(go* nil ~@body))
 
 (defn thread-call
   "Executes f in another thread, returning immediately to the calling
-  thread. Returns a channel which will receive the result of calling
-  f when completed."
-  [f]
-  (let [c (chan 1)]
-    (let [binds (clojure.lang.Var/getThreadBindingFrame)]
-      (.execute thread-macro-executor
-                (fn []
-                  (clojure.lang.Var/resetThreadBindingFrame binds)
-                  (try
-                    (let [ret (f)]
-                      (when-not (nil? ret)
-                        (>!! c ret)))
-                    (finally
-                      (close! c))))))
-    c))
+  thread. An optional second argument allows to pass an executor that
+  implements clojure.core.async.impl.protocols/Executor. Returns a
+  channel which will receive the result of calling f when completed."
+  ([f]
+   (thread-call f nil))
+  ([f {:keys [executor]}]
+   (let [c (chan 1)]
+     (let [binds (clojure.lang.Var/getThreadBindingFrame)]
+       (impl/exec (or executor (tp/thread-pool-executor @tp/default-cached-executor))
+                  (fn []
+                    (clojure.lang.Var/resetThreadBindingFrame binds)
+                    (try
+                      (let [ret (f)]
+                        (when-not (nil? ret)
+                          (>!! c ret)))
+                      (finally
+                        (close! c))))))
+     c)))
+
+(defmacro thread*
+  "Same as thread but takes an option map first:
+  :executor - An executor that implements
+clojure.core.async.impl.protocols/Executor"
+  [opts & body]
+  `(thread-call (fn [] ~@body) ~opts))
 
 (defmacro thread
   "Executes the body in another thread, returning immediately to the

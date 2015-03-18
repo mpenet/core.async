@@ -2,6 +2,7 @@
   (:refer-clojure :exclude [map into reduce merge take partition
                             partition-by])
   (:require [clojure.core.async.impl.ioc-macros :as ioc]
+            [clojure.core.async.impl.exec.threadpool :as tp]
             [clojure.core.async :refer :all :as async]
             [clojure.test :refer :all])
   (:import [java.io FileInputStream ByteArrayOutputStream File]))
@@ -307,7 +308,12 @@
         (is (= 42
                (<!! (go (try
                           (assert false)
-                          (catch Throwable ex (<! c))))))))))
+                          (catch Throwable ex (<! c)))))))))
+
+    (testing "test custom executor"
+      (is (= 10
+             (<!! (go* {:executor (tp/thread-pool-executor @tp/default-fixed-executor)}
+                       (<! (identity-chan 10))))))))
 
   (deftest offer-poll
     (let [c (chan 2)]
