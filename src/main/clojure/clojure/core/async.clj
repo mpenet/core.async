@@ -494,10 +494,6 @@
                        true)))]
        (dotimes [_ n]
          (case type
-               :blocking (thread
-                          (let [job (<!! jobs)]
-                            (when (process job)
-                              (recur))))
                :compute (go-loop []
                                    (let [job (<! jobs)]
                                      (when (process job)
@@ -524,6 +520,10 @@
                             (when (and (not (nil? v)) (>! to v))
                               (recur))))
                         (recur))))))))
+         :blocking (go-loop []
+                     (let [job (<! jobs)]
+                       (when (async/<! (thread job))
+                         (recur))))
 
 ;;todo - switch pipe arg order to match these (to/from)
 (defn pipeline
