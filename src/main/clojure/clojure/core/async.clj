@@ -544,9 +544,9 @@ to catch and handle."
                        true)))]
        (dotimes [_ n]
          (case type
-               (:blocking :compute) (thread
-                                      (let [job (<!! jobs)]
-                                        (when (process job)
+               (:blocking :compute) (go-loop []
+                                      (let [job (<! jobs)]
+                                        (when (<! (thread (process job)))
                                           (recur))))
                :async (go-loop []
                                  (let [job (<! jobs)]
